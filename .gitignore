@@ -17,3 +17,6 @@
 .DS_Store
 .idea/
 .vscode/
+
+# Claude Code 的本地配置，含本机的权限白名单，不适合共享
+/.claude/
