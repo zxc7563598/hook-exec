@@ -1,0 +1,96 @@
+/* Tailwind 源文件。构建产物是 vendor/app.css，那份才被 go:embed 打进二进制。
+ *
+ * 改了 index.html 里的类名之后要跑一次 `make css` 重新生成。
+ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* 深色是唯一的主题，直接钉在根上，不做主题切换 */
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-slate-900 text-slate-50 font-sans antialiased;
+  }
+
+  /* 键盘焦点必须可见。只在 :focus-visible 上画环，鼠标点击不出现，
+     既满足可访问性又不干扰鼠标用户。 */
+  :focus-visible {
+    @apply outline-none ring-2 ring-emerald-500/70 ring-offset-2 ring-offset-slate-900;
+  }
+
+  /* 尊重系统的减少动效设置 */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  /* 统一的输入控件外观 */
+  .hc-input {
+    @apply w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm
+           text-slate-50 transition-colors duration-150
+           placeholder:text-slate-500 hover:border-slate-600
+           focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/50;
+  }
+
+  .hc-input-error {
+    @apply border-red-500 focus:border-red-500 focus:ring-red-500/50;
+  }
+
+  .hc-label {
+    @apply mb-1.5 block text-xs font-medium text-slate-300;
+  }
+
+  .hc-btn {
+    @apply inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-md
+           px-3 py-2 text-sm font-medium transition-colors duration-150
+           disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .hc-btn-primary {
+    @apply hc-btn bg-emerald-600 text-white hover:bg-emerald-500;
+  }
+
+  .hc-btn-ghost {
+    @apply hc-btn border border-slate-700 text-slate-300 hover:border-slate-600 hover:bg-slate-800 hover:text-slate-50;
+  }
+
+  .hc-btn-danger {
+    @apply hc-btn border border-red-900 text-red-400 hover:border-red-700 hover:bg-red-950/50;
+  }
+
+  /* 图标按钮：44×44 的最小可点区域由 p-2 + 图标尺寸凑出来 */
+  .hc-icon-btn {
+    @apply inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-md
+           text-slate-400 transition-colors duration-150
+           hover:bg-slate-700/60 hover:text-slate-50;
+  }
+
+  .hc-card {
+    @apply rounded-lg border border-slate-700 bg-slate-800 transition-colors duration-150;
+  }
+
+  /* 代码/路径/输出统一等宽 */
+  .hc-mono {
+    @apply font-mono text-xs;
+  }
+
+  /* 滚动条也跟着深色走，否则默认的亮色滚动条在深色面板上很扎眼 */
+  .hc-scroll::-webkit-scrollbar {
+    @apply h-2 w-2;
+  }
+  .hc-scroll::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  .hc-scroll::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-slate-600;
+  }
+}

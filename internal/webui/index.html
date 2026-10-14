@@ -1,0 +1,1358 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HookExec · Webhook 脚本执行器</title>
+<!-- 图标内联成 data URI：不额外加路由，也不会产生 /favicon.ico 的 404 请求 -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230F172A'/%3E%3Cpath d='M8 11l5 5-5 5' stroke='%2322C55E' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M17 21h7' stroke='%2322C55E' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/web/assets/app.css">
+<script src="/web/assets/vue.global.prod.js"></script>
+</head>
+<body>
+
+<div id="app" class="min-h-screen">
+  <!-- ══ 顶栏 ══ -->
+  <header class="sticky top-0 z-30 border-b border-slate-700 bg-slate-900/95 backdrop-blur">
+    <div class="mx-auto flex max-w-7xl flex-wrap items-center gap-x-4 gap-y-3 px-4 py-3 sm:px-6">
+      <div class="flex items-center gap-2.5">
+        <span class="flex h-8 w-8 items-center justify-center rounded-md bg-emerald-500/15 text-emerald-400">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line>
+          </svg>
+        </span>
+        <div class="leading-tight">
+          <h1 class="text-sm font-semibold tracking-tight">HookExec</h1>
+          <p class="text-[11px] text-slate-500">GitHub Webhook 脚本执行器</p>
+        </div>
+      </div>
+
+      <!-- 脚本目录：运维最需要知道的一条信息，直接摆在顶栏 -->
+      <div class="order-last flex min-w-0 flex-1 items-center gap-2 sm:order-none">
+        <span class="hidden shrink-0 text-[11px] text-slate-500 sm:inline">脚本目录</span>
+        <button type="button"
+                class="hc-mono group flex min-w-0 items-center gap-1.5 truncate rounded border border-slate-700 bg-slate-800/60 px-2 py-1 text-slate-400 transition-colors duration-150 hover:border-slate-600 hover:text-slate-200"
+                :title="'复制路径：' + shellDir"
+                @click="copyText(shellDir, '脚本目录路径已复制')">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="shrink-0">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+          </svg>
+          <span class="truncate">{{ shellDir || '加载中…' }}</span>
+        </button>
+      </div>
+
+      <div class="ml-auto flex items-center gap-2">
+        <span class="flex items-center gap-1.5 text-[11px] text-slate-500" :title="online ? '已连接' : '连接异常'">
+          <span class="h-1.5 w-1.5 rounded-full" :class="online ? 'bg-emerald-500' : 'bg-red-500'"></span>
+          {{ online ? '已连接' : '连接异常' }}
+        </span>
+        <button type="button" class="hc-btn-primary" @click="openCreate">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true">
+            <line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          新建项目
+        </button>
+      </div>
+    </div>
+
+    <!-- 视图切换 -->
+    <div class="mx-auto flex max-w-7xl gap-1 px-4 sm:px-6">
+      <button v-for="t in tabs" :key="t.key" type="button"
+              class="-mb-px cursor-pointer border-b-2 px-3 py-2 text-sm font-medium transition-colors duration-150"
+              :class="tab === t.key
+                ? 'border-emerald-500 text-slate-50'
+                : 'border-transparent text-slate-400 hover:border-slate-600 hover:text-slate-200'"
+              :aria-current="tab === t.key ? 'page' : undefined"
+              @click="switchTab(t.key)">
+        {{ t.label }}
+        <span v-if="t.key === 'projects' && projects.length" class="ml-1 text-[11px] text-slate-500">{{ projects.length }}</span>
+        <span v-if="t.key === 'executions' && execTotal" class="ml-1 text-[11px] text-slate-500">{{ execTotal }}</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-7xl px-4 py-5 sm:px-6">
+    <!-- 全局错误 -->
+    <div v-if="error" role="alert"
+         class="mb-4 flex items-start justify-between gap-3 rounded-lg border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
+      <span>{{ error }}</span>
+      <button type="button" class="hc-icon-btn -my-1 -mr-2 h-7 w-7" aria-label="关闭错误提示" @click="error = ''">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
+    </div>
+
+    <!-- ══ 项目视图 ══ -->
+    <section v-show="tab === 'projects'" aria-label="项目列表">
+      <div v-if="loading" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <div v-for="i in 3" :key="i" class="hc-card h-44 animate-pulse"></div>
+      </div>
+
+      <!-- 空状态：给出下一步该做什么，而不是只显示"暂无数据" -->
+      <div v-else-if="!projects.length" class="hc-card flex flex-col items-center gap-3 px-6 py-14 text-center">
+        <span class="flex h-11 w-11 items-center justify-center rounded-full bg-slate-700/50 text-slate-400">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+          </svg>
+        </span>
+        <h2 class="text-sm font-medium text-slate-200">还没有配置任何项目</h2>
+        <p class="max-w-md text-xs leading-relaxed text-slate-400">
+          先把你写好的部署脚本放进 <code class="hc-mono rounded bg-slate-900 px-1.5 py-0.5 text-slate-300">{{ shellDir || '脚本目录' }}</code>
+          并执行 <code class="hc-mono rounded bg-slate-900 px-1.5 py-0.5 text-slate-300">chmod +x</code>，然后新建一个项目把它和 GitHub 仓库关联起来。
+        </p>
+        <button type="button" class="hc-btn-primary mt-1" @click="openCreate">新建项目</button>
+      </div>
+
+      <div v-else class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <article v-for="p in projects" :key="p.id" class="hc-card flex flex-col p-4 hover:border-slate-600">
+          <!-- 卡片头：名称 + 启用开关 -->
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <h3 class="truncate text-sm font-semibold text-slate-50" :title="p.name">{{ p.name }}</h3>
+              <p class="hc-mono mt-0.5 flex items-center gap-1 truncate text-slate-400" :title="p.repo">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" class="shrink-0 opacity-70">
+                  <path d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.9 1.2 1.9 1.2 1.1 1.9 2.9 1.3 3.6 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.4 4.7 18.4 5 18.4 5c.7 1.7.3 2.9.1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.8 5.7-5.5 6 .4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"></path>
+                </svg>
+                <span class="truncate">{{ p.repo }}</span>
+              </p>
+            </div>
+            <toggle-switch :model-value="p.enabled" :label="p.name + ' 启用状态'"
+                           @update:model-value="v => toggleEnabled(p, v)"></toggle-switch>
+          </div>
+
+          <!-- 事件 -->
+          <div class="mt-3 flex flex-wrap gap-1">
+            <span v-if="!p.events.length" class="rounded border border-slate-600 bg-slate-700/40 px-1.5 py-0.5 text-[11px] text-slate-300">全部事件</span>
+            <template v-else>
+              <span v-for="ev in p.events" :key="ev"
+                    class="hc-mono rounded border border-slate-600 bg-slate-700/40 px-1.5 py-0.5 text-slate-300">{{ ev }}</span>
+            </template>
+          </div>
+
+          <!-- 脚本 / 工作目录 / 超时 -->
+          <dl class="mt-3 space-y-1.5 border-t border-slate-700 pt-3 text-xs">
+            <div class="flex items-start gap-2">
+              <dt class="w-14 shrink-0 text-slate-500">脚本</dt>
+              <dd class="hc-mono min-w-0 flex-1 text-slate-300">
+                <button type="button"
+                        class="cursor-pointer truncate text-left text-emerald-400 underline decoration-dotted underline-offset-2 transition-colors hover:text-emerald-300"
+                        :aria-label="'预览脚本 ' + p.shell_file"
+                        :title="'预览 ' + p.shell_file"
+                        @click="openPreview(p.shell_file)">
+                  {{ p.shell_file }}
+                </button>
+                <span v-if="!p.script_exists" class="ml-1 rounded bg-red-950 px-1 py-0.5 text-[10px] text-red-400" title="脚本目录里找不到这个文件">文件缺失</span>
+                <span v-else-if="!p.script_executable" class="ml-1 rounded bg-amber-950 px-1 py-0.5 text-[10px] text-amber-400" title="没有可执行位，请在服务器上 chmod +x">不可执行</span>
+              </dd>
+            </div>
+            <div v-if="p.workdir" class="flex items-start gap-2">
+              <dt class="w-14 shrink-0 text-slate-500">目录</dt>
+              <dd class="hc-mono min-w-0 flex-1 truncate text-slate-400" :title="p.workdir">{{ p.workdir }}</dd>
+            </div>
+            <div class="flex items-start gap-2">
+              <dt class="w-14 shrink-0 text-slate-500">超时</dt>
+              <dd class="hc-mono flex-1 text-slate-400">{{ p.timeout_sec }} 秒</dd>
+            </div>
+          </dl>
+
+          <!-- 卡片底：最近一次执行 + 操作 -->
+          <div class="mt-auto flex items-center justify-between gap-2 border-t border-slate-700 pt-3">
+            <div class="flex min-w-0 items-center gap-1.5 text-[11px] text-slate-500">
+              <template v-if="p.last_execution">
+                <status-dot :status="p.last_execution.status"></status-dot>
+                <span class="truncate">{{ statusLabel(p.last_execution.status) }} · {{ relTime(p.last_execution.finished_at || p.last_execution.created_at) }}</span>
+              </template>
+              <span v-else>尚无执行记录</span>
+            </div>
+
+            <div class="flex shrink-0 items-center gap-0.5">
+              <button type="button" class="hc-icon-btn" :aria-label="'编辑 ' + p.name" title="编辑" @click="openEdit(p)">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"></path></svg>
+              </button>
+              <button type="button" class="hc-icon-btn" :aria-label="'立即执行 ' + p.name" title="立即执行一次" @click="runProject(p)">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+              </button>
+              <button type="button" class="hc-icon-btn hover:bg-red-950/60 hover:text-red-400" :aria-label="'删除 ' + p.name" title="删除" @click="confirmDelete = p">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+              </button>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ══ 执行记录视图 ══ -->
+    <section v-show="tab === 'executions'" aria-label="执行记录">
+      <!-- 筛选 -->
+      <div class="mb-3 flex flex-wrap items-center gap-2">
+        <label class="sr-only" for="filter-project">按项目筛选</label>
+        <select id="filter-project" v-model="filterProject" class="hc-input w-auto min-w-[9rem]" @change="reloadExecutions">
+          <option value="">全部项目</option>
+          <option v-for="p in projects" :key="p.id" :value="String(p.id)">{{ p.name }}</option>
+        </select>
+
+        <label class="sr-only" for="filter-status">按状态筛选</label>
+        <select id="filter-status" v-model="filterStatus" class="hc-input w-auto min-w-[7rem]" @change="reloadExecutions">
+          <option value="">全部状态</option>
+          <option v-for="s in allStatuses" :key="s" :value="s">{{ statusLabel(s) }}</option>
+        </select>
+
+        <button v-if="filterProject || filterStatus" type="button" class="hc-btn-ghost" @click="clearFilters">清除筛选</button>
+
+        <div class="ml-auto flex items-center gap-2">
+          <button type="button" class="hc-btn-ghost" :disabled="execLoading" @click="reloadExecutions">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" :class="execLoading ? 'animate-spin' : ''"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg>
+            刷新
+          </button>
+          <button type="button" class="hc-btn-danger" :disabled="!execTotal"
+                  @click="confirmClear = true">清空记录</button>
+        </div>
+      </div>
+
+      <!-- 表格 -->
+      <div class="hc-card overflow-hidden">
+        <div v-if="execLoading && !executions.length" class="p-8 text-center text-sm text-slate-500">加载中…</div>
+        <div v-else-if="!executions.length" class="p-10 text-center text-sm text-slate-500">
+          {{ filterProject || filterStatus ? '当前筛选条件下没有记录' : '还没有执行记录' }}
+        </div>
+        <div v-else class="overflow-x-auto hc-scroll">
+          <table class="w-full text-left text-sm">
+            <thead class="border-b border-slate-700 text-[11px] uppercase tracking-wide text-slate-500">
+              <tr>
+                <th scope="col" class="px-3 py-2 font-medium">状态</th>
+                <th scope="col" class="px-3 py-2 font-medium">项目</th>
+                <th scope="col" class="px-3 py-2 font-medium">事件</th>
+                <th scope="col" class="hidden px-3 py-2 font-medium lg:table-cell">分支 / 提交</th>
+                <th scope="col" class="hidden px-3 py-2 font-medium sm:table-cell">耗时</th>
+                <th scope="col" class="px-3 py-2 font-medium">时间</th>
+                <th scope="col" class="w-10 px-3 py-2"><span class="sr-only">操作</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="r in executions" :key="r.id"
+                  class="cursor-pointer border-b border-slate-700/60 transition-colors duration-150 last:border-0 hover:bg-slate-700/30"
+                  tabindex="0"
+                  @click="openDetail(r.id)"
+                  @keydown.enter.prevent="openDetail(r.id)"
+                  @keydown.space.prevent="openDetail(r.id)">
+                <td class="px-3 py-2"><status-badge :status="r.status"></status-badge></td>
+                <td class="px-3 py-2">
+                  <div class="truncate font-medium text-slate-200" :title="r.project_name">{{ r.project_name }}</div>
+                  <div class="hc-mono truncate text-slate-500" :title="r.repo">{{ r.repo }}</div>
+                </td>
+                <td class="hc-mono px-3 py-2 text-slate-300">
+                  {{ r.event }}
+                  <span v-if="r.trigger === 'manual'" class="ml-1 rounded bg-slate-700 px-1 py-0.5 text-[10px] text-slate-300" title="由管理页手动触发">手动</span>
+                </td>
+                <td class="hc-mono hidden px-3 py-2 text-slate-400 lg:table-cell">
+                  <div v-if="r.branch" class="truncate" :title="r.branch">{{ r.branch }}</div>
+                  <div v-if="r.sha" class="truncate text-slate-500" :title="r.sha">{{ r.sha.slice(0, 8) }}</div>
+                  <span v-if="!r.branch && !r.sha" class="text-slate-600">—</span>
+                </td>
+                <td class="hc-mono hidden px-3 py-2 text-slate-400 sm:table-cell">{{ fmtDuration(r) }}</td>
+                <td class="hc-mono px-3 py-2 text-slate-400" :title="fmtAbs(r.created_at)">{{ relTime(r.created_at) }}</td>
+                <td class="px-3 py-2">
+                  <button type="button" class="hc-icon-btn h-7 w-7 hover:bg-red-950/60 hover:text-red-400"
+                          :aria-label="'删除记录 ' + r.id"
+                          @click.stop="deleteExecution(r)">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- 分页 -->
+        <div v-if="execTotal > execPageSize" class="flex items-center justify-between gap-3 border-t border-slate-700 px-3 py-2.5 text-xs text-slate-400">
+          <span>共 {{ execTotal }} 条，第 {{ execPage }} / {{ totalPages }} 页</span>
+          <div class="flex gap-2">
+            <button type="button" class="hc-btn-ghost py-1" :disabled="execPage <= 1" @click="gotoPage(execPage - 1)">上一页</button>
+            <button type="button" class="hc-btn-ghost py-1" :disabled="execPage >= totalPages" @click="gotoPage(execPage + 1)">下一页</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ══ 项目表单弹窗 ══ -->
+  <modal-shell v-if="formOpen" :title="formMode === 'create' ? '新建项目' : '编辑项目'"
+               :subtitle="formMode === 'create' ? '把 GitHub 仓库的推送关联到 shell 目录里的一个脚本' : form.name"
+               @close="closeForm">
+    <form id="project-form" class="space-y-4" novalidate @submit.prevent="submitForm">
+      <!-- 项目名称 -->
+      <div>
+        <label class="hc-label" for="f-name">项目名称 <span class="text-red-400">*</span></label>
+        <input id="f-name" v-model="form.name" type="text" class="hc-input" :class="{'hc-input-error': formErrors.name}"
+               placeholder="例如：博客生产环境部署" autocomplete="off"
+               :aria-invalid="!!formErrors.name" :aria-describedby="formErrors.name ? 'e-name' : undefined"
+               @blur="validateField('name')">
+        <p v-if="formErrors.name" id="e-name" class="mt-1 text-xs text-red-400" role="alert">{{ formErrors.name }}</p>
+      </div>
+
+      <!-- 仓库 -->
+      <div>
+        <label class="hc-label" for="f-repo">仓库 <span class="text-red-400">*</span></label>
+        <input id="f-repo" v-model="form.repo" type="text" class="hc-input hc-mono" :class="{'hc-input-error': formErrors.repo}"
+               placeholder="owner/repo" autocomplete="off" spellcheck="false"
+               :aria-invalid="!!formErrors.repo" :aria-describedby="formErrors.repo ? 'e-repo' : 'h-repo'"
+               @blur="validateField('repo')">
+        <p v-if="formErrors.repo" id="e-repo" class="mt-1 text-xs text-red-400" role="alert">{{ formErrors.repo }}</p>
+        <p v-else id="h-repo" class="mt-1 text-xs text-slate-500">必须和 webhook payload 里的 repository.full_name 完全一致</p>
+      </div>
+
+      <!-- 密钥 -->
+      <div>
+        <label class="hc-label" for="f-secret">Webhook 密钥 <span v-if="formMode === 'create'" class="text-red-400">*</span></label>
+        <div class="flex gap-2">
+          <div class="relative flex-1">
+            <input id="f-secret" v-model="form.secret" :type="showSecret ? 'text' : 'password'"
+                   class="hc-input hc-mono pr-10" :class="{'hc-input-error': formErrors.secret}"
+                   :placeholder="formMode === 'edit' ? '留空表示不修改' : 'GitHub webhook 里填的 secret'"
+                   autocomplete="new-password" spellcheck="false" @blur="validateField('secret')">
+            <button type="button" class="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 cursor-pointer rounded text-slate-500 transition-colors hover:text-slate-300"
+                    :aria-label="showSecret ? '隐藏密钥' : '显示密钥'" @click="showSecret = !showSecret">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mx-auto">
+                <path v-if="!showSecret" d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                <circle v-if="!showSecret" cx="12" cy="12" r="3"></circle>
+                <template v-if="showSecret"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></template>
+              </svg>
+            </button>
+          </div>
+          <button type="button" class="hc-btn-ghost shrink-0" @click="generateSecret">生成</button>
+        </div>
+        <p v-if="formErrors.secret" class="mt-1 text-xs text-red-400" role="alert">{{ formErrors.secret }}</p>
+        <p v-else class="mt-1 text-xs text-slate-500">
+          {{ formMode === 'edit' ? '已设置密钥，留空保持原值不变' : '要和 GitHub webhook 设置页里填的 secret 一致，用于校验签名' }}
+        </p>
+      </div>
+
+      <!-- 脚本文件 -->
+      <div>
+        <div class="mb-1.5 flex items-center justify-between">
+          <label class="hc-label mb-0" for="f-script">脚本文件 <span class="text-red-400">*</span></label>
+          <button type="button" class="flex cursor-pointer items-center gap-1 text-xs text-slate-400 transition-colors hover:text-slate-200"
+                  :disabled="scriptsLoading" @click="loadScripts">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" :class="scriptsLoading ? 'animate-spin' : ''"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg>
+            重新扫描
+          </button>
+        </div>
+
+        <!-- 目录为空时给引导，而不是丢一个空下拉框 -->
+        <div v-if="!scripts.length" class="rounded-md border border-amber-900/60 bg-amber-950/30 px-3 py-2.5 text-xs leading-relaxed text-amber-300">
+          脚本目录里还没有文件。请先登录服务器，把你的脚本放到
+          <code class="hc-mono rounded bg-slate-900 px-1.5 py-0.5 text-slate-200">{{ shellDir }}</code>
+          下，并执行 <code class="hc-mono rounded bg-slate-900 px-1.5 py-0.5 text-slate-200">chmod +x 脚本名</code>，然后点「重新扫描」。
+        </div>
+
+        <template v-else>
+          <select id="f-script" v-model="form.shell_file" class="hc-input hc-mono"
+                  :class="{'hc-input-error': formErrors.shell_file}" @change="validateField('shell_file')">
+            <option value="">— 请选择 —</option>
+            <option v-for="s in scripts" :key="s.name" :value="s.name">
+              {{ s.name }} · {{ fmtSize(s.size) }} · {{ fmtDate(s.mod_time) }}{{ s.executable ? '' : '（没有可执行位）' }}
+            </option>
+          </select>
+
+          <div v-if="selectedScript && !selectedScript.executable" role="alert"
+               class="mt-1.5 rounded-md border border-amber-900/60 bg-amber-950/30 px-2.5 py-2 text-xs text-amber-300">
+            这个文件没有可执行位，直接执行会失败。请在服务器上执行
+            <code class="hc-mono rounded bg-slate-900 px-1.5 py-0.5 text-slate-200">chmod +x {{ selectedScript.name }}</code>
+          </div>
+          <p v-else-if="selectedScript" class="mt-1 text-xs text-slate-500">
+            首行需要 shebang（如 <code class="hc-mono text-slate-400">#!/bin/bash</code>），脚本会以它指定的解释器直接执行。
+          </p>
+        </template>
+
+        <p v-if="formErrors.shell_file" class="mt-1 text-xs text-red-400" role="alert">{{ formErrors.shell_file }}</p>
+      </div>
+
+      <!-- 事件类型 -->
+      <fieldset>
+        <legend class="hc-label">事件类型</legend>
+        <div class="flex flex-wrap gap-1.5">
+          <button type="button"
+                  class="cursor-pointer rounded border px-2 py-1 text-xs transition-colors duration-150"
+                  :class="allEvents
+                    ? 'border-emerald-600 bg-emerald-500/15 text-emerald-300'
+                    : 'border-slate-600 bg-slate-700/40 text-slate-300 hover:border-slate-500'"
+                  :aria-pressed="allEvents"
+                  @click="toggleAllEvents">
+            全部事件
+          </button>
+          <button v-for="ev in eventChips" :key="ev" type="button"
+                  class="hc-mono cursor-pointer rounded border px-2 py-1 text-xs transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40"
+                  :class="form.events.includes(ev)
+                    ? 'border-emerald-600 bg-emerald-500/15 text-emerald-300'
+                    : 'border-slate-600 bg-slate-700/40 text-slate-300 hover:border-slate-500'"
+                  :disabled="allEvents"
+                  :aria-pressed="form.events.includes(ev)"
+                  @click="toggleEvent(ev)">
+            {{ ev }}
+          </button>
+        </div>
+
+        <div class="mt-2 flex gap-2">
+          <label class="sr-only" for="f-custom-event">自定义事件名</label>
+          <input id="f-custom-event" v-model="customEvent" type="text" class="hc-input hc-mono flex-1"
+                 placeholder="自定义事件名，如 deployment_status" autocomplete="off" spellcheck="false"
+                 :disabled="allEvents" @keydown.enter.prevent="addCustomEvent">
+          <button type="button" class="hc-btn-ghost shrink-0" :disabled="allEvents || !customEvent.trim()" @click="addCustomEvent">添加</button>
+        </div>
+        <p class="mt-1 text-xs text-slate-500">
+          {{ allEvents ? '已选择全部事件，任何事件都会触发这个项目。' : '不选任何事件等同于全部事件。' }}
+        </p>
+      </fieldset>
+
+      <!-- 工作目录 / 超时 -->
+      <div class="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label class="hc-label" for="f-workdir">工作目录</label>
+          <input id="f-workdir" v-model="form.workdir" type="text" class="hc-input hc-mono" :class="{'hc-input-error': formErrors.workdir}"
+                 placeholder="/opt/myapp（留空则用服务自身目录）" autocomplete="off" spellcheck="false"
+                 @blur="validateField('workdir')">
+          <p v-if="formErrors.workdir" class="mt-1 text-xs text-red-400" role="alert">{{ formErrors.workdir }}</p>
+          <p v-else class="mt-1 text-xs text-slate-500">脚本会在服务器上的这个目录里执行</p>
+        </div>
+        <div>
+          <label class="hc-label" for="f-timeout">超时时间（秒）</label>
+          <input id="f-timeout" v-model.number="form.timeout_sec" type="number" min="1" max="86400"
+                 class="hc-input hc-mono" :class="{'hc-input-error': formErrors.timeout_sec}"
+                 @blur="validateField('timeout_sec')">
+          <p v-if="formErrors.timeout_sec" class="mt-1 text-xs text-red-400" role="alert">{{ formErrors.timeout_sec }}</p>
+          <p v-else class="mt-1 text-xs text-slate-500">超过这个时间会终止整个进程组，默认 300 秒</p>
+        </div>
+      </div>
+
+      <!-- 启用 -->
+      <div class="flex items-center justify-between rounded-md border border-slate-700 px-3 py-2.5">
+        <div>
+          <p class="text-sm text-slate-200">启用这个项目</p>
+          <p class="text-xs text-slate-500">停用后 webhook 依然会返回成功，但不会执行脚本</p>
+        </div>
+        <toggle-switch v-model="form.enabled" label="启用这个项目"></toggle-switch>
+      </div>
+    </form>
+
+    <template #footer>
+      <button type="button" class="hc-btn-ghost" @click="closeForm">取消</button>
+      <button type="submit" form="project-form" class="hc-btn-primary" :disabled="formSubmitting">
+        <svg v-if="formSubmitting" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="animate-spin" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.22-8.56" stroke-linecap="round"></path></svg>
+        {{ formSubmitting ? '保存中…' : '保存' }}
+      </button>
+    </template>
+  </modal-shell>
+
+  <!-- ══ 脚本预览 ══ -->
+  <modal-shell v-if="preview.open" :title="preview.name || '脚本预览'" subtitle="只读预览" wide @close="preview.open = false">
+    <div v-if="preview.loading" class="py-10 text-center text-sm text-slate-500">加载中…</div>
+    <div v-else-if="preview.error" role="alert" class="rounded-md border border-red-900 bg-red-950/40 px-3 py-2 text-sm text-red-300">
+      {{ preview.error }}
+    </div>
+    <template v-else>
+      <div class="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400">
+        <span class="hc-mono">{{ preview.info.size }} 字节</span>
+        <span class="hc-mono">权限 {{ preview.info.mode }}</span>
+        <span class="hc-mono">修改于 {{ fmtAbs(preview.info.mod_time) }}</span>
+        <span v-if="!preview.info.executable" class="rounded bg-amber-950 px-1.5 py-0.5 text-amber-400">没有可执行位</span>
+      </div>
+      <pre class="hc-scroll hc-mono max-h-[60vh] overflow-auto rounded-md border border-slate-700 bg-slate-900 p-3 leading-relaxed text-slate-300">{{ preview.content }}</pre>
+      <p v-if="preview.truncated" class="mt-2 text-xs text-amber-400">文件较大，仅显示前 512KB。</p>
+    </template>
+    <template #footer>
+      <button type="button" class="hc-btn-ghost" @click="preview.open = false">关闭</button>
+    </template>
+  </modal-shell>
+
+  <!-- ══ 执行详情抽屉 ══ -->
+  <drawer-shell v-if="detail.open" title="执行详情" @close="detail.open = false">
+    <template #subtitle>
+      <p class="hc-mono truncate text-xs text-slate-400">#{{ detail.rec ? detail.rec.id : '' }} · {{ detail.rec ? detail.rec.project_name : '' }}</p>
+    </template>
+
+    <div v-if="detail.loading" class="py-10 text-center text-sm text-slate-500">加载中…</div>
+    <div v-else-if="detail.error" role="alert" class="rounded-md border border-red-900 bg-red-950/40 px-3 py-2 text-sm text-red-300">{{ detail.error }}</div>
+    <template v-else-if="detail.rec">
+      <div class="mb-4 flex items-center gap-2">
+        <status-badge :status="detail.rec.status"></status-badge>
+        <span class="hc-mono text-xs text-slate-400">{{ fmtDuration(detail.rec) }}</span>
+        <span v-if="detail.rec.exit_code !== null && detail.rec.exit_code !== undefined"
+              class="hc-mono text-xs text-slate-400">退出码 {{ detail.rec.exit_code }}</span>
+      </div>
+
+      <div v-if="detail.rec.error" role="alert"
+           class="mb-4 rounded-md border border-red-900 bg-red-950/40 px-3 py-2 text-sm text-red-300">{{ detail.rec.error }}</div>
+
+      <dl class="mb-4 grid grid-cols-[5.5rem_1fr] gap-x-3 gap-y-2 text-xs">
+        <template v-for="row in detailRows" :key="row.label">
+          <dt class="text-slate-500">{{ row.label }}</dt>
+          <dd class="hc-mono min-w-0 break-all text-slate-300">{{ row.value }}</dd>
+        </template>
+      </dl>
+
+      <div class="mb-1.5 flex items-center justify-between">
+        <h3 class="text-xs font-medium text-slate-300">输出</h3>
+        <span v-if="detail.rec.output_truncated" class="text-[11px] text-amber-400">仅保留末尾 32KB</span>
+      </div>
+      <pre v-if="detail.rec.output" class="hc-scroll hc-mono max-h-96 overflow-auto whitespace-pre-wrap break-all rounded-md border border-slate-700 bg-slate-900 p-3 leading-relaxed text-slate-300">{{ detail.rec.output }}</pre>
+      <p v-else class="rounded-md border border-slate-700 bg-slate-900 px-3 py-6 text-center text-xs text-slate-500">
+        这次执行没有任何输出
+      </p>
+    </template>
+
+    <template #footer>
+      <button v-if="detail.rec" type="button" class="hc-btn-danger" @click="deleteExecution(detail.rec, true)">删除这条记录</button>
+      <button type="button" class="hc-btn-ghost ml-auto" @click="detail.open = false">关闭</button>
+    </template>
+  </drawer-shell>
+
+  <!-- ══ 删除确认 ══ -->
+  <modal-shell v-if="confirmDelete" title="删除项目" :subtitle="confirmDelete.name" @close="confirmDelete = null">
+    <p class="text-sm leading-relaxed text-slate-300">
+      确定要删除项目 <strong class="text-slate-50">{{ confirmDelete.name }}</strong> 吗？
+    </p>
+    <p class="mt-2 text-xs leading-relaxed text-slate-500">
+      配置会被永久删除。已有的执行记录会保留，因为那是历史事实 —— 项目没了不代表当时没跑过。
+      脚本文件本身在服务器上，不会被动到。
+    </p>
+    <template #footer>
+      <button type="button" class="hc-btn-ghost" @click="confirmDelete = null">取消</button>
+      <button type="button" class="hc-btn-danger" @click="doDeleteProject">删除</button>
+    </template>
+  </modal-shell>
+
+  <!-- ══ 清空记录确认 ══ -->
+  <modal-shell v-if="confirmClear" title="清空执行记录" subtitle="此操作不可撤销" @close="confirmClear = false">
+    <p class="text-sm leading-relaxed text-slate-300">
+      将删除 {{ filterProject || filterStatus ? '当前筛选条件下的' : '全部' }}执行记录，此操作不可撤销。
+    </p>
+    <p class="mt-2 text-xs text-slate-500">项目配置不受影响。</p>
+    <template #footer>
+      <button type="button" class="hc-btn-ghost" @click="confirmClear = false">取消</button>
+      <button type="button" class="hc-btn-danger" @click="doClearExecutions">清空</button>
+    </template>
+  </modal-shell>
+
+  <!-- ══ 导入配置 ══ -->
+  <modal-shell v-if="importOpen" title="导入配置" subtitle="从导出的 JSON 文件恢复项目" @close="importOpen = false">
+    <p class="mb-3 text-xs leading-relaxed text-slate-400">
+      同名同仓库的项目会被跳过。脚本文件当前不存在只作为提示，不会导致导入失败 ——
+      先把配置导进来、再把脚本传上去是正常的顺序。
+    </p>
+    <label class="hc-label" for="f-import">配置文件内容</label>
+    <textarea id="f-import" v-model="importText" rows="10"
+              class="hc-input hc-scroll hc-mono resize-y leading-relaxed"
+              placeholder='粘贴导出的 JSON，或直接选择文件' spellcheck="false"></textarea>
+    <input ref="fileInput" type="file" accept="application/json,.json" class="hidden" @change="onFilePicked">
+    <button type="button" class="hc-btn-ghost mt-2" @click="$refs.fileInput.click()">选择文件…</button>
+
+    <div v-if="importResult" class="mt-3 space-y-2 text-xs">
+      <p class="text-slate-300">
+        导入 <strong class="text-emerald-400">{{ importResult.imported }}</strong> 条，
+        跳过 <strong class="text-slate-400">{{ importResult.skipped }}</strong> 条，
+        失败 <strong :class="importResult.failed ? 'text-red-400' : 'text-slate-400'">{{ importResult.failed }}</strong> 条。
+      </p>
+      <ul v-if="importResult.warnings && importResult.warnings.length" class="hc-scroll max-h-32 space-y-1 overflow-y-auto rounded border border-amber-900/60 bg-amber-950/30 p-2 text-amber-300">
+        <li v-for="(w, i) in importResult.warnings" :key="'w' + i">{{ w.message }}</li>
+      </ul>
+      <ul v-if="importResult.errors && importResult.errors.length" class="hc-scroll max-h-32 space-y-1 overflow-y-auto rounded border border-red-900 bg-red-950/30 p-2 text-red-300">
+        <li v-for="(e, i) in importResult.errors" :key="'e' + i">{{ e.message }}</li>
+      </ul>
+    </div>
+
+    <template #footer>
+      <button type="button" class="hc-btn-ghost" @click="importOpen = false">关闭</button>
+      <button type="button" class="hc-btn-primary" :disabled="importing || !importText.trim()" @click="doImport">
+        {{ importing ? '导入中…' : '开始导入' }}
+      </button>
+    </template>
+  </modal-shell>
+
+  <!-- ══ 提示 ══ -->
+  <div class="pointer-events-none fixed bottom-4 right-4 z-50 flex w-80 flex-col gap-2" role="status" aria-live="polite">
+    <div v-for="t in toasts" :key="t.id"
+         class="pointer-events-auto flex items-start gap-2 rounded-md border px-3 py-2.5 text-sm shadow-lg"
+         :class="t.type === 'error'
+           ? 'border-red-800 bg-red-950/95 text-red-200'
+           : 'border-slate-600 bg-panel text-slate-200'">
+      <svg v-if="t.type === 'error'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="mt-0.5 shrink-0"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+      <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mt-0.5 shrink-0 text-emerald-400"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+      <span class="min-w-0 flex-1 break-words">{{ t.text }}</span>
+    </div>
+  </div>
+
+  <!-- 页脚：导入导出放在这里，不占主界面 -->
+  <footer class="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2 px-4 pb-6 pt-2 text-xs text-slate-600 sm:px-6">
+    <span>HookExec · 只执行脚本目录内的脚本，网页端不能创建或修改脚本</span>
+    <div class="flex gap-3">
+      <button type="button" class="cursor-pointer transition-colors hover:text-slate-400" @click="exportConfig">导出配置</button>
+      <button type="button" class="cursor-pointer transition-colors hover:text-slate-400" @click="importOpen = true; importResult = null">导入配置</button>
+    </div>
+  </footer>
+</div>
+
+<!-- ══════════ 组件模板 ══════════ -->
+
+<script type="text/x-template" id="tpl-status-badge">
+  <span class="inline-flex items-center gap-1.5 rounded border px-1.5 py-0.5 text-[11px] font-medium"
+        :class="style.cls">
+    <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="style.dot"></span>
+    {{ style.label }}
+  </span>
+</script>
+
+<script type="text/x-template" id="tpl-status-dot">
+  <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="style.dot" :title="style.label"></span>
+</script>
+
+<script type="text/x-template" id="tpl-toggle-switch">
+  <button type="button" role="switch" :aria-checked="String(modelValue)" :aria-label="label"
+          class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-50"
+          :class="modelValue ? 'border-emerald-600 bg-emerald-600' : 'border-slate-600 bg-slate-700'"
+          :disabled="disabled"
+          @click="$emit('update:modelValue', !modelValue)">
+    <span class="inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform duration-200"
+          :class="modelValue ? 'translate-x-[1.15rem]' : 'translate-x-[0.15rem]'"></span>
+  </button>
+</script>
+
+<script type="text/x-template" id="tpl-modal-shell">
+  <div class="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto p-4 sm:items-center" role="dialog" aria-modal="true" :aria-label="title">
+    <div class="fixed inset-0 bg-slate-950/70" @click="$emit('close')"></div>
+    <div ref="panel" tabindex="-1" class="relative my-auto w-full rounded-lg border border-slate-700 bg-slate-800 shadow-xl outline-none"
+         :class="wide ? 'max-w-3xl' : 'max-w-lg'">
+      <header class="flex items-start justify-between gap-3 border-b border-slate-700 px-4 py-3">
+        <div class="min-w-0">
+          <h2 class="text-sm font-semibold text-slate-50">{{ title }}</h2>
+          <p v-if="subtitle" class="hc-mono truncate text-xs text-slate-400">{{ subtitle }}</p>
+        </div>
+        <button type="button" class="hc-icon-btn" aria-label="关闭" @click="$emit('close')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </header>
+
+      <div class="hc-scroll max-h-[70vh] overflow-y-auto px-4 py-4">
+        <slot></slot>
+      </div>
+
+      <footer v-if="$slots.footer" class="flex items-center justify-end gap-2 border-t border-slate-700 px-4 py-3">
+        <slot name="footer"></slot>
+      </footer>
+    </div>
+  </div>
+</script>
+
+<script type="text/x-template" id="tpl-drawer-shell">
+  <div class="fixed inset-0 z-40 flex justify-end" role="dialog" aria-modal="true" :aria-label="title">
+    <div class="absolute inset-0 bg-slate-950/70" @click="$emit('close')"></div>
+    <div ref="panel" tabindex="-1" class="relative flex h-full w-full max-w-2xl flex-col border-l border-slate-700 bg-slate-800 outline-none">
+      <header class="flex items-start justify-between gap-3 border-b border-slate-700 px-4 py-3">
+        <div class="min-w-0">
+          <h2 class="text-sm font-semibold text-slate-50">{{ title }}</h2>
+          <slot name="subtitle"></slot>
+        </div>
+        <button type="button" class="hc-icon-btn" aria-label="关闭详情" @click="$emit('close')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </header>
+
+      <div class="hc-scroll flex-1 overflow-y-auto p-4">
+        <slot></slot>
+      </div>
+
+      <footer v-if="$slots.footer" class="flex items-center justify-between gap-2 border-t border-slate-700 px-4 py-3">
+        <slot name="footer"></slot>
+      </footer>
+    </div>
+  </div>
+</script>
+
+<!-- ══════════ 应用 ══════════ -->
+
+<script>
+(function () {
+  'use strict';
+
+  const { createApp } = Vue;
+
+  // 状态样式表。
+  //
+  // 这里必须写完整的字面量类名，不能拼字符串（比如 'bg-' + color）——
+  // Tailwind 是在构建时扫描文本找出用到的类，拼出来的名字它看不见，
+  // 那些类不会进 CSS，运行时样式就是空的。
+  const STATUS = {
+    success:     { label: '成功',   cls: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400', dot: 'bg-emerald-400' },
+    failed:      { label: '失败',   cls: 'border-red-500/30 bg-red-500/10 text-red-400',             dot: 'bg-red-400' },
+    timeout:     { label: '超时',   cls: 'border-orange-500/30 bg-orange-500/10 text-orange-400',    dot: 'bg-orange-400' },
+    running:     { label: '执行中', cls: 'border-amber-500/30 bg-amber-500/10 text-amber-400',       dot: 'bg-amber-400 animate-pulse' },
+    pending:     { label: '排队中', cls: 'border-slate-500/30 bg-slate-500/10 text-slate-300',       dot: 'bg-slate-400' },
+    interrupted: { label: '已中断', cls: 'border-purple-500/30 bg-purple-500/10 text-purple-400',    dot: 'bg-purple-400' },
+    skipped:     { label: '已跳过', cls: 'border-slate-600/40 bg-slate-600/10 text-slate-400',       dot: 'bg-slate-500' },
+  };
+  const UNKNOWN_STATUS = { label: '未知', cls: 'border-slate-600 bg-slate-700/40 text-slate-400', dot: 'bg-slate-500' };
+  const statusStyle = (s) => STATUS[s] || UNKNOWN_STATUS;
+
+  const POLL_INTERVAL = 2500;
+  const TERMINAL = ['success', 'failed', 'timeout', 'interrupted', 'skipped'];
+
+  // ── API 客户端 ──
+  // 所有管理接口都在 /web/api 下，和页面同源，浏览器会自动带上
+  // Basic Auth 凭证，这里不需要手动加 Authorization。
+  // 写操作必须带 X-Requested-With，服务端靠它挡 CSRF。
+  async function api(method, path, body) {
+    const res = await fetch('/web/api' + path, {
+      method,
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      credentials: 'same-origin',
+    });
+
+    let payload = null;
+    try { payload = await res.json(); } catch (_) { /* 例如 401 的响应体不是 JSON */ }
+
+    if (!res.ok) {
+      const err = new Error((payload && payload.message) || ('请求失败（HTTP ' + res.status + '）'));
+      err.status = res.status;
+      err.fields = payload && payload.data && payload.data.fields ? payload.data.fields : null;
+      throw err;
+    }
+    return payload ? payload.data : null;
+  }
+
+  // ── 独立的小组件 ──
+
+  const StatusBadge = {
+    template: '#tpl-status-badge',
+    props: { status: String },
+    computed: { style() { return statusStyle(this.status); } },
+  };
+
+  const StatusDot = {
+    template: '#tpl-status-dot',
+    props: { status: String },
+    computed: { style() { return statusStyle(this.status); } },
+  };
+
+  // ToggleSwitch 用 role="switch" 并支持键盘，因为点击区在卡片头部，
+  // 纯 div + click 对键盘用户是不可达的。
+  const ToggleSwitch = {
+    template: '#tpl-toggle-switch',
+    props: {
+      modelValue: Boolean,
+      label: { type: String, default: '开关' },
+      disabled: Boolean,
+    },
+    emits: ['update:modelValue'],
+  };
+
+  // 浮层的公共行为：Esc 关闭 + 打开时把焦点移进来。
+  //
+  // 焦点那一步不能省：不移动的话键盘用户按 Tab 仍然在背景页面上走，
+  // 完全意识不到弹层已经打开。聚焦面板本身（tabindex="-1"）是最小且
+  // 足够的做法。
+  const overlayBehavior = {
+    props: { title: String },
+    emits: ['close'],
+    mounted() {
+      this._onKey = (e) => { if (e.key === 'Escape') this.$emit('close'); };
+      document.addEventListener('keydown', this._onKey);
+      // 等一帧，确保面板已经渲染出来
+      this.$nextTick(() => {
+        if (this.$refs.panel) this.$refs.panel.focus();
+      });
+    },
+    unmounted() {
+      document.removeEventListener('keydown', this._onKey);
+    },
+  };
+
+  const ModalShell = {
+    template: '#tpl-modal-shell',
+    ...overlayBehavior,
+    props: { title: String, subtitle: String, wide: Boolean },
+  };
+
+  const DrawerShell = {
+    template: '#tpl-drawer-shell',
+    ...overlayBehavior,
+  };
+
+  const app = createApp({
+    components: { StatusBadge, StatusDot, ToggleSwitch, ModalShell, DrawerShell },
+
+    data() {
+      return {
+        tabs: [
+          { key: 'projects', label: '项目' },
+          { key: 'executions', label: '执行记录' },
+        ],
+        tab: 'projects',
+        online: true,
+        error: '',
+        loading: true,
+
+        projects: [],
+        shellDir: '',
+        commonEvents: [],
+        allStatuses: [],
+
+        scripts: [],
+        scriptsLoading: false,
+
+        // 表单
+        formOpen: false,
+        formMode: 'create',
+        formSubmitting: false,
+        showSecret: false,
+        customEvent: '',
+        formErrors: {},
+        form: this.blankForm(),
+
+        // 预览
+        preview: { open: false, loading: false, name: '', content: '', info: {}, error: '', truncated: false },
+
+        // 执行记录
+        executions: [],
+        execTotal: 0,
+        execPage: 1,
+        execPageSize: 20,
+        execLoading: false,
+        filterProject: '',
+        filterStatus: '',
+
+        detail: { open: false, loading: false, rec: null, error: '' },
+
+        confirmDelete: null,
+        confirmClear: false,
+
+        importOpen: false,
+        importText: '',
+        importResult: null,
+        importing: false,
+
+        toasts: [],
+        toastSeq: 0,
+        pollTimer: null,
+      };
+    },
+
+    computed: {
+      allEvents() {
+        return this.form.events.includes('*');
+      },
+
+      // 常用事件和用户自己加过的事件合并成待选 chips
+      eventChips() {
+        const set = new Set(this.commonEvents);
+        this.form.events.forEach((e) => { if (e !== '*') set.add(e); });
+        return Array.from(set);
+      },
+
+      selectedScript() {
+        return this.scripts.find((s) => s.name === this.form.shell_file) || null;
+      },
+
+      totalPages() {
+        return Math.max(1, Math.ceil(this.execTotal / this.execPageSize));
+      },
+
+      detailRows() {
+        const r = this.detail.rec;
+        if (!r) return [];
+        const rows = [
+          ['项目', r.project_name],
+          ['仓库', r.repo],
+          ['事件', r.event],
+          ['触发方式', r.trigger === 'manual' ? '手动触发' : 'Webhook'],
+          ['脚本', r.shell_file],
+          ['分支', r.branch],
+          ['引用', r.ref],
+          ['提交', r.sha],
+          ['触发者', r.actor],
+          ['投递 ID', r.delivery_id],
+          ['开始', this.fmtAbs(r.started_at)],
+          ['结束', this.fmtAbs(r.finished_at)],
+          ['创建', this.fmtAbs(r.created_at)],
+        ];
+        return rows
+          .filter(([, v]) => v !== '' && v !== null && v !== undefined && v !== '—')
+          .map(([label, value]) => ({ label, value: String(value) }));
+      },
+    },
+
+    mounted() {
+      this.bootstrap();
+      document.addEventListener('visibilitychange', this.onVisibilityChange);
+    },
+
+    unmounted() {
+      document.removeEventListener('visibilitychange', this.onVisibilityChange);
+      this.stopPolling();
+    },
+
+    methods: {
+      blankForm() {
+        return {
+          id: null, name: '', repo: '', secret: '', events: [],
+          shell_file: '', workdir: '', timeout_sec: 300, enabled: true,
+        };
+      },
+
+      async bootstrap() {
+        this.loading = true;
+        try {
+          await Promise.all([this.loadProjects(), this.loadScripts()]);
+          this.online = true;
+        } catch (e) {
+          this.online = false;
+          this.error = e.message;
+        } finally {
+          this.loading = false;
+        }
+      },
+
+      // ── 数据加载 ──
+
+      async loadProjects() {
+        const d = await api('GET', '/projects');
+        this.projects = d.projects || [];
+        this.shellDir = d.shell_dir || '';
+        this.commonEvents = d.common_events || [];
+        this.allStatuses = d.all_statuses || [];
+        this.online = true;
+      },
+
+      async loadScripts() {
+        this.scriptsLoading = true;
+        try {
+          const d = await api('GET', '/scripts');
+          this.scripts = d.scripts || [];
+          this.shellDir = d.shell_dir || this.shellDir;
+        } catch (e) {
+          this.toast(e.message, 'error');
+        } finally {
+          this.scriptsLoading = false;
+        }
+      },
+
+      async loadExecutions() {
+        this.execLoading = true;
+        const params = new URLSearchParams();
+        params.set('page', String(this.execPage));
+        params.set('page_size', String(this.execPageSize));
+        if (this.filterProject) params.set('project_id', this.filterProject);
+        if (this.filterStatus) params.set('status', this.filterStatus);
+
+        try {
+          const d = await api('GET', '/executions?' + params.toString());
+          this.executions = d.executions || [];
+          this.execTotal = d.total || 0;
+          this.online = true;
+        } catch (e) {
+          this.online = false;
+          this.error = e.message;
+        } finally {
+          this.execLoading = false;
+        }
+      },
+
+      reloadExecutions() {
+        this.execPage = 1;
+        return this.loadExecutions();
+      },
+
+      gotoPage(page) {
+        if (page < 1 || page > this.totalPages) return;
+        this.execPage = page;
+        this.loadExecutions();
+      },
+
+      clearFilters() {
+        this.filterProject = '';
+        this.filterStatus = '';
+        this.reloadExecutions();
+      },
+
+      /** 切换视图。只在记录页轮询，项目页没什么会自己变的。 */
+      switchTab(key) {
+        this.tab = key;
+        if (key === 'executions') {
+          this.loadExecutions();
+          this.startPolling();
+        } else {
+          this.stopPolling();
+          this.loadProjects().catch((e) => { this.error = e.message; });
+        }
+      },
+
+      /**
+       * 轮询让 pending → running → success 的转变能自己动起来。
+       * 记录页不可见、或页面被切到后台时停掉，不做无谓的请求。
+       */
+      startPolling() {
+        this.stopPolling();
+        this.pollTimer = setInterval(() => {
+          if (this.tab !== 'executions' || document.hidden) return;
+          // 在途记录都结束了就没什么可等的了
+          const hasActive = this.executions.some((r) => !TERMINAL.includes(r.status));
+          if (!hasActive && this.executions.length) return;
+          this.loadExecutions();
+        }, POLL_INTERVAL);
+      },
+
+      stopPolling() {
+        if (this.pollTimer) {
+          clearInterval(this.pollTimer);
+          this.pollTimer = null;
+        }
+      },
+
+      onVisibilityChange() {
+        if (this.tab !== 'executions') return;
+        if (document.hidden) this.stopPolling();
+        else { this.loadExecutions(); this.startPolling(); }
+      },
+
+      // ── 表单 ──
+
+      openCreate() {
+        this.formMode = 'create';
+        this.form = this.blankForm();
+        this.formErrors = {};
+        this.showSecret = false;
+        this.customEvent = '';
+        this.formOpen = true;
+        if (!this.scripts.length) this.loadScripts();
+      },
+
+      openEdit(p) {
+        this.formMode = 'edit';
+        this.form = {
+          id: p.id,
+          name: p.name,
+          repo: p.repo,
+          // 密钥不回声。留空提交表示保持原值不变。
+          secret: '',
+          events: p.events.slice(),
+          shell_file: p.shell_file,
+          workdir: p.workdir,
+          timeout_sec: p.timeout_sec,
+          enabled: p.enabled,
+        };
+        this.formErrors = {};
+        this.showSecret = false;
+        this.customEvent = '';
+        this.formOpen = true;
+        this.loadScripts();
+      },
+
+      closeForm() {
+        this.formOpen = false;
+      },
+
+      toggleAllEvents() {
+        this.form.events = this.allEvents ? [] : ['*'];
+      },
+
+      toggleEvent(ev) {
+        const i = this.form.events.indexOf(ev);
+        if (i === -1) this.form.events.push(ev);
+        else this.form.events.splice(i, 1);
+      },
+
+      addCustomEvent() {
+        const v = this.customEvent.trim();
+        if (!v) return;
+        if (v !== '*' && !this.form.events.includes(v)) this.form.events.push(v);
+        this.customEvent = '';
+      },
+
+      /** 前端校验只是为了让用户不用等一个来回；服务端仍会独立校验一遍。 */
+      validateField(field) {
+        const f = this.form;
+        const errs = { ...this.formErrors };
+        delete errs[field];
+
+        if (field === 'name' && !f.name.trim()) errs.name = '项目名称不能为空';
+        if (field === 'repo') {
+          const v = f.repo.trim();
+          if (!v) errs.repo = '仓库不能为空';
+          else if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(v)) errs.repo = '仓库格式应为 owner/repo';
+        }
+        if (field === 'secret' && this.formMode === 'create' && !f.secret.trim()) {
+          errs.secret = '密钥不能为空，请填写 GitHub webhook 的 secret';
+        }
+        if (field === 'shell_file' && !f.shell_file) errs.shell_file = '请选择要执行的脚本文件';
+        if (field === 'timeout_sec') {
+          const t = Number(f.timeout_sec);
+          if (!Number.isFinite(t) || t < 1 || t > 86400) errs.timeout_sec = '超时时间应在 1 到 86400 秒之间';
+        }
+        this.formErrors = errs;
+      },
+
+      async submitForm() {
+        ['name', 'repo', 'secret', 'shell_file', 'timeout_sec'].forEach((f) => this.validateField(f));
+        if (Object.keys(this.formErrors).length) return;
+
+        this.formSubmitting = true;
+        try {
+          const body = {
+            name: this.form.name.trim(),
+            repo: this.form.repo.trim(),
+            secret: this.form.secret,
+            events: this.form.events,
+            shell_file: this.form.shell_file,
+            workdir: this.form.workdir.trim(),
+            timeout_sec: Number(this.form.timeout_sec) || 300,
+            enabled: this.form.enabled,
+          };
+
+          if (this.formMode === 'create') {
+            await api('POST', '/projects', body);
+            this.toast('项目已创建');
+          } else {
+            await api('PUT', '/projects/' + this.form.id, body);
+            this.toast('项目已更新');
+          }
+          this.formOpen = false;
+          await this.loadProjects();
+        } catch (e) {
+          // 服务端返回的字段级错误挂到对应输入框旁边
+          if (e.fields && e.fields.length) {
+            const errs = {};
+            e.fields.forEach((f) => { errs[f.field] = f.message; });
+            this.formErrors = errs;
+            this.toast('请检查表单中标红的字段', 'error');
+          } else {
+            this.toast(e.message, 'error');
+          }
+        } finally {
+          this.formSubmitting = false;
+        }
+      },
+
+      generateSecret() {
+        const bytes = new Uint8Array(24);
+        crypto.getRandomValues(bytes);
+        this.form.secret = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+        this.validateField('secret');
+        this.toast('已生成随机密钥，记得同步填到 GitHub 的 webhook 设置里');
+      },
+
+      // ── 项目操作 ──
+
+      async toggleEnabled(p, enabled) {
+        const before = p.enabled;
+        p.enabled = enabled; // 乐观更新，失败再回滚
+        try {
+          await api('PATCH', '/projects/' + p.id + '/enabled', { enabled });
+          this.toast(enabled ? '已启用「' + p.name + '」' : '已停用「' + p.name + '」');
+        } catch (e) {
+          p.enabled = before;
+          this.toast(e.message, 'error');
+        }
+      },
+
+      async runProject(p) {
+        try {
+          await api('POST', '/projects/' + p.id + '/run');
+          this.toast('已触发「' + p.name + '」，稍后可在执行记录里查看结果');
+        } catch (e) {
+          this.toast(e.message, 'error');
+        }
+      },
+
+      async doDeleteProject() {
+        const p = this.confirmDelete;
+        if (!p) return;
+        try {
+          await api('DELETE', '/projects/' + p.id);
+          this.confirmDelete = null;
+          this.toast('已删除「' + p.name + '」');
+          await this.loadProjects();
+        } catch (e) {
+          this.toast(e.message, 'error');
+        }
+      },
+
+      // ── 脚本预览 ──
+
+      async openPreview(name) {
+        if (!name) return;
+        this.preview = { open: true, loading: true, name, content: '', info: {}, error: '', truncated: false };
+        try {
+          const d = await api('GET', '/scripts/content?name=' + encodeURIComponent(name));
+          this.preview = {
+            open: true, loading: false, name: d.name, content: d.content,
+            info: d, error: '', truncated: d.truncated,
+          };
+        } catch (e) {
+          this.preview = { open: true, loading: false, name, content: '', info: {}, error: e.message, truncated: false };
+        }
+      },
+
+      // ── 执行记录 ──
+
+      async openDetail(id) {
+        this.detail = { open: true, loading: true, rec: null, error: '' };
+        try {
+          const rec = await api('GET', '/executions/' + id);
+          this.detail = { open: true, loading: false, rec, error: '' };
+        } catch (e) {
+          this.detail = { open: true, loading: false, rec: null, error: e.message };
+        }
+      },
+
+      async deleteExecution(rec, fromDetail) {
+        try {
+          await api('DELETE', '/executions/' + rec.id);
+          if (fromDetail) this.detail.open = false;
+          this.toast('记录已删除');
+          await this.loadExecutions();
+        } catch (e) {
+          this.toast(e.message, 'error');
+        }
+      },
+
+      async doClearExecutions() {
+        const params = new URLSearchParams();
+        if (this.filterProject) params.set('project_id', this.filterProject);
+        if (this.filterStatus) params.set('status', this.filterStatus);
+
+        try {
+          const d = await api('DELETE', '/executions?' + params.toString());
+          this.confirmClear = false;
+          this.toast('已清空 ' + d.deleted + ' 条记录');
+          this.execPage = 1;
+          await this.loadExecutions();
+        } catch (e) {
+          this.toast(e.message, 'error');
+        }
+      },
+
+      // ── 导入导出 ──
+
+      async exportConfig() {
+        try {
+          const res = await fetch('/web/api/config/export', { credentials: 'same-origin' });
+          if (!res.ok) throw new Error('导出失败（HTTP ' + res.status + '）');
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'hook-exec-config.json';
+          a.click();
+          URL.revokeObjectURL(url);
+          this.toast('配置已导出。文件含明文密钥，请妥善保管');
+        } catch (e) {
+          this.toast(e.message, 'error');
+        }
+      },
+
+      onFilePicked(e) {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => { this.importText = String(reader.result); };
+        reader.readAsText(file);
+        e.target.value = '';
+      },
+
+      async doImport() {
+        let parsed;
+        try {
+          parsed = JSON.parse(this.importText);
+        } catch (_) {
+          this.toast('内容不是合法的 JSON', 'error');
+          return;
+        }
+
+        this.importing = true;
+        try {
+          this.importResult = await api('POST', '/config/import', parsed);
+          this.toast('导入完成：成功 ' + this.importResult.imported + ' 条');
+          await this.loadProjects();
+        } catch (e) {
+          this.toast(e.message, 'error');
+        } finally {
+          this.importing = false;
+        }
+      },
+
+      // ── 工具方法 ──
+
+      statusLabel(s) { return statusStyle(s).label; },
+
+      fmtDuration(r) {
+        if (r.status === 'pending' || r.status === 'running') return '—';
+        const ms = r.duration_ms;
+        if (!ms) return ms === 0 ? '0s' : '—';
+        if (ms < 1000) return ms + 'ms';
+        if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+        const m = Math.floor(ms / 60000);
+        const s = Math.round((ms % 60000) / 1000);
+        return m + 'm' + s + 's';
+      },
+
+      fmtSize(bytes) {
+        if (bytes < 1024) return bytes + 'B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'KB';
+        return (bytes / 1024 / 1024).toFixed(1) + 'MB';
+      },
+
+      fmtDate(iso) {
+        if (!iso) return '';
+        const d = new Date(iso);
+        const p = (n) => String(n).padStart(2, '0');
+        return (d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+      },
+
+      fmtAbs(iso) {
+        if (!iso) return '';
+        const d = new Date(iso);
+        const p = (n) => String(n).padStart(2, '0');
+        return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+               ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+      },
+
+      relTime(iso) {
+        if (!iso) return '';
+        const diff = Date.now() - new Date(iso).getTime();
+        if (diff < 0) return '刚刚';
+        const sec = Math.floor(diff / 1000);
+        if (sec < 60) return sec + ' 秒前';
+        const min = Math.floor(sec / 60);
+        if (min < 60) return min + ' 分钟前';
+        const hr = Math.floor(min / 60);
+        if (hr < 24) return hr + ' 小时前';
+        const day = Math.floor(hr / 24);
+        if (day < 30) return day + ' 天前';
+        return this.fmtDate(iso);
+      },
+
+      async copyText(text, okMsg) {
+        if (!text) return;
+        try {
+          await navigator.clipboard.writeText(text);
+          this.toast(okMsg || '已复制');
+        } catch (_) {
+          // 非 HTTPS 下 clipboard API 不可用，退回提示用户手动复制
+          this.toast('复制失败，请手动选择复制', 'error');
+        }
+      },
+
+      toast(text, type) {
+        const id = ++this.toastSeq;
+        this.toasts.push({ id, text, type: type || 'ok' });
+        setTimeout(() => {
+          const i = this.toasts.findIndex((t) => t.id === id);
+          if (i !== -1) this.toasts.splice(i, 1);
+        }, type === 'error' ? 6000 : 3500);
+      },
+    },
+  });
+
+  app.mount('#app');
+})();
+</script>
+</body>
+</html>
