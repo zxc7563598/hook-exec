@@ -337,6 +337,69 @@ internal/webui/              单页与内嵌静态资源
 
 ---
 
+## 发布
+
+```bash
+git tag v0.1.0
+make release
+```
+
+产物落在 `dist/`：
+
+```
+dist/
+├── hook-exec_v0.1.0_linux_amd64.tar.gz
+├── hook-exec_v0.1.0_linux_arm64.tar.gz
+├── hook-exec_v0.1.0_darwin_amd64.tar.gz
+├── hook-exec_v0.1.0_darwin_arm64.tar.gz
+└── checksums.txt
+```
+
+每个包里是一个 `hook-exec` 可执行文件和这份 README，解压即用。
+
+交叉编译靠 `CGO_ENABLED=0` —— SQLite 走纯 Go 实现，所以不需要目标平台的
+工具链，在一台机器上就能打出全部四个包。版本号通过 `-ldflags` 注入，
+启动日志第一行会打出来。
+
+**版本号取自 HEAD 上的 tag。** 没有 tag，或者工作区有未提交改动时，
+`make release` 会直接拒绝 —— 免得打出一个对不上任何一次提交、却带着
+正式版本号的包。试打时可以用：
+
+```bash
+make release RELEASE_VERSION=v0.1.0-rc1 ALLOW_DIRTY=1
+```
+
+平台列表可以覆盖：
+
+```bash
+make release PLATFORMS="linux/amd64 linux/arm64"
+```
+
+### 为什么没有 Windows
+
+不是偷懒，是这套代码在 Windows 上跑不起来，硬编也编不过：
+
+- 进程组的建立与终止（`Setpgid`、`kill(-pgid)`）是 Unix 专有的，
+  而"超时终止整个进程组"是这里明确的行为保证，砍掉它脚本派生的
+  `npm run build` 会变成孤儿进程继续跑。
+- 可执行位在 Windows 上没有意义（`Perm()` 恒为 `0666` 或 `0444`），
+  那套"脚本没有可执行位就提前报错"的检查会误杀掉全部脚本。
+
+真要支持得另写一套 Job Object 的进程树管理，以及一套 Windows 的
+脚本可执行性判断。
+
+### macOS 下载后跑不起来
+
+从浏览器下载的包会被打上隔离属性，首次运行可能被 Gatekeeper 拦下：
+
+```bash
+xattr -d com.apple.quarantine hook-exec
+```
+
+`curl` 下载的不会带这个属性。
+
+---
+
 ## 许可证
 
 MIT
