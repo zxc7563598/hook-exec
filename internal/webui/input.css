@@ -45,6 +45,19 @@
     @apply border-red-500 focus:border-red-500 focus:ring-red-500/50;
   }
 
+  /* 下拉框：干掉原生箭头自绘一个，否则系统箭头会紧贴右边框，
+     选项文本长了还会钻到箭头底下。
+     必须和 .hc-input 一起用，靠源码顺序（同层同优先级，后写的赢）
+     盖掉 .hc-input 的 padding 简写。 */
+  .hc-select {
+    @apply cursor-pointer appearance-none bg-no-repeat pr-9;
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+    background-position: right 0.625rem center;
+    background-size: 1rem 1rem;
+    /* 长选项名截断，而不是撑破宽度或压到箭头上 */
+    text-overflow: ellipsis;
+  }
+
   .hc-label {
     @apply mb-1.5 block text-xs font-medium text-slate-300;
   }
@@ -52,7 +65,8 @@
   .hc-btn {
     @apply inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-md
            px-3 py-2 text-sm font-medium transition-colors duration-150
-           disabled:cursor-not-allowed disabled:opacity-50;
+           disabled:cursor-not-allowed disabled:opacity-50
+           active:scale-[0.98];
   }
 
   .hc-btn-primary {
@@ -71,7 +85,22 @@
   .hc-icon-btn {
     @apply inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-md
            text-slate-400 transition-colors duration-150
-           hover:bg-slate-700/60 hover:text-slate-50;
+           hover:bg-slate-700/60 hover:text-slate-50
+           active:scale-[0.96];
+  }
+
+  /* 事件标签：选中/未选中的配色写在调用点，这里只放两边共用的骨架 */
+  .hc-chip {
+    @apply inline-flex cursor-pointer items-center rounded border px-2.5 py-1.5 text-xs
+           transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  /* 开关本体只有 20×36，触屏上点不准。用一个透明伪元素把命中区撑到 44×44，
+     视觉尺寸不动 —— 直接放大按钮会把卡片头部撑得很难看。 */
+  .hc-switch::after {
+    content: "";
+    position: absolute;
+    inset: -0.75rem -0.25rem;
   }
 
   .hc-card {
@@ -92,5 +121,99 @@
   }
   .hc-scroll::-webkit-scrollbar-thumb {
     @apply rounded-full bg-slate-600;
+  }
+
+  /* ── 移动端安全区 ──
+     iPhone 的 home indicator 会盖住贴底元素，这几个类把内边距/位置
+     往下让出 env(safe-area-inset-bottom)。非刘海屏上 env() 取 0，退化成普通间距。
+     注意：这几个类不能和 p-* / bottom-* 之类的工具类同时用，
+     工具类在 utilities 层，会盖掉 components 层。 */
+  .hc-safe-bottom {
+    bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  }
+  .hc-safe-pb {
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  }
+  .hc-overlay-pad {
+    padding: 1rem;
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* ── 浮层过渡 ──
+ *
+ * Vue <Transition> 的 name 写在属性里（name="hc-panel"），Tailwind 按
+ * content 里的字面文本扫描，扫不出 hc-panel-enter-active 这些派生类名，
+ * 所以它们不能放进 @layer components —— 会被当成"没用到"purge 掉。
+ * 写在层外就原样输出，不受扫描影响。
+ *
+ * 分工：遮罩只改透明度，面板/抽屉只改位移，避免两层同时改 opacity
+ * 叠出两段式的变暗。 */
+.hc-overlay-enter-active {
+  transition: opacity .18s ease;
+}
+.hc-overlay-leave-active {
+  transition: opacity .15s ease;
+}
+.hc-overlay-enter-from,
+.hc-overlay-leave-to {
+  opacity: 0;
+}
+
+.hc-panel-enter-active {
+  transition: transform .2s cubic-bezier(.16, 1, .3, 1);
+}
+.hc-panel-leave-active {
+  transition: transform .15s ease-in;
+}
+.hc-panel-enter-from,
+.hc-panel-leave-to {
+  transform: scale(.96) translateY(.75rem);
+}
+
+.hc-drawer-enter-active {
+  transition: transform .24s cubic-bezier(.16, 1, .3, 1);
+}
+.hc-drawer-leave-active {
+  transition: transform .18s ease-in;
+}
+.hc-drawer-enter-from,
+.hc-drawer-leave-to {
+  transform: translateX(100%);
+}
+
+/* Toast：滑入滑出，-move 负责其余条目补位的 FLIP 补间 */
+.hc-toast-enter-active,
+.hc-toast-leave-active {
+  transition: opacity .2s ease, transform .2s ease;
+}
+.hc-toast-enter-from,
+.hc-toast-leave-to {
+  opacity: 0;
+  transform: translateX(1.5rem);
+}
+.hc-toast-move {
+  transition: transform .2s ease;
+}
+
+/* 触屏设备：把可点区域补到能可靠点中的尺寸。
+   鼠标环境不受影响，所以桌面端的密度保持原样。
+
+   四个按钮变体要一个个列出来：它们各自是 @apply hc-btn 展开的独立类，
+   只写 .hc-btn 盖不到 .hc-btn-primary。（产物 app.css 里因此会出现几条
+   内容重复的 (pointer:coarse) 规则，是 @apply 把 .hc-btn 那条带进各变体
+   的结果，不影响行为。） */
+@media (pointer: coarse) {
+  .hc-btn,
+  .hc-btn-primary,
+  .hc-btn-ghost,
+  .hc-btn-danger {
+    min-height: 2.75rem;
+  }
+  .hc-icon-btn {
+    @apply h-11 w-11;
+  }
+  .hc-chip {
+    min-height: 2.25rem;
   }
 }
